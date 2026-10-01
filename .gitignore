@@ -1,0 +1,9 @@
+# Raw dataset files (too large for GitHub, available on Kaggle instead)
+*.csv
+dataset/
+olist_dataset/
+
+# Keep things tidy
+*.log
+.DS_Store
+Thumbs.db

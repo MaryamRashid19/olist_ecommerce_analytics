@@ -1,0 +1,154 @@
+/* =====================================================================
+   Olist Sales Analysis | Power BI DAX definitions
+   Model: DirectQuery on PostgreSQL view bi_fact_sales
+          (imported in Power BI as the table 'public bi_fact_sales')
+   Relationship: DimDate[Date] (1) -> 'public bi_fact_sales'[purchase_date] (many)
+
+   Each definition below is one measure (or the date table / calculated column).
+   Create them in Power BI Desktop via Modeling > New measure / New table / New column.
+   ===================================================================== */
+
+
+/* ---------------------------------------------------------------------
+   1. DATE TABLE (calculated table)
+   --------------------------------------------------------------------- */
+
+DimDate =
+ADDCOLUMNS(
+    CALENDAR(
+        MIN('public bi_fact_sales'[purchase_date]),
+        MAX('public bi_fact_sales'[purchase_date])
+    ),
+    "Year",        YEAR([Date]),
+    "Month No",    MONTH([Date]),
+    "Month",       FORMAT([Date], "MMM"),
+    "Year-Month",  FORMAT([Date], "YYYY-MM"),
+    "Quarter",     "Q" & FORMAT([Date], "Q"),
+    "Weekday No",  WEEKDAY([Date], 2),
+    "Weekday",     FORMAT([Date], "DDD"),
+    "Month Start", DATE(YEAR([Date]), MONTH([Date]), 1)
+)
+
+
+/* ---------------------------------------------------------------------
+   2. SALES AND ORDERS
+   --------------------------------------------------------------------- */
+
+Revenue         = SUM('public bi_fact_sales'[price])
+Orders          = DISTINCTCOUNT('public bi_fact_sales'[order_id])
+AOV             = DIVIDE([Revenue], [Orders])
+Freight         = SUM('public bi_fact_sales'[freight_value])
+GMV             = [Freight] + [Revenue]
+Customers       = DISTINCTCOUNT('public bi_fact_sales'[customer_unique_id])
+Items Sold      = COUNTROWS('public bi_fact_sales')
+Items per Order = DIVIDE([Items Sold], [Orders])
+
+
+/* ---------------------------------------------------------------------
+   3. LOGISTICS AND SLA
+   --------------------------------------------------------------------- */
+
+Delivered Orders =
+CALCULATE([Orders], 'public bi_fact_sales'[order_status] = "delivered")
+
+Late Orders =
+CALCULATE(
+    [Orders],
+    'public bi_fact_sales'[order_status] = "delivered",
+    'public bi_fact_sales'[is_late] = 1
+)
+
+ON-time % = DIVIDE([Delivered Orders] - [Late Orders], [Delivered Orders])
+Late %    = DIVIDE([Late Orders], [Delivered Orders])
+
+Avg Delivery Days = AVERAGE('public bi_fact_sales'[delivery_days])
+On-time Target    = 0.90
+
+
+/* ---------------------------------------------------------------------
+   4. REVIEWS
+   --------------------------------------------------------------------- */
+
+Avg_Rating = AVERAGE('public bi_fact_sales'[review_score])
+
+Positive Review % =
+DIVIDE(
+    CALCULATE(COUNTROWS('public bi_fact_sales'), 'public bi_fact_sales'[review_score] >= 4),
+    CALCULATE(COUNTROWS('public bi_fact_sales'), NOT ISBLANK('public bi_fact_sales'[review_score]))
+)
+
+Negative Reviews % =
+DIVIDE(
+    CALCULATE(COUNTROWS('public bi_fact_sales'), 'public bi_fact_sales'[review_score] <= 2),
+    CALCULATE(COUNTROWS('public bi_fact_sales'), NOT ISBLANK('public bi_fact_sales'[review_score]))
+)
+
+
+/* ---------------------------------------------------------------------
+   5. PAYMENTS
+   bi_fact_sales is at item grain and repeats the order-level payment value
+   on every item row, so these measures aggregate once per order.
+   --------------------------------------------------------------------- */
+
+Payment Value =
+SUMX(
+    VALUES('public bi_fact_sales'[order_id]),
+    CALCULATE(MAX('public bi_fact_sales'[payment_value]))
+)
+
+Average Installments =
+AVERAGEX(
+    VALUES('public bi_fact_sales'[order_id]),
+    CALCULATE(MAX('public bi_fact_sales'[payment_installments]))
+)
+
+Payment % of Total =
+DIVIDE(
+    [Payment Value],
+    CALCULATE([Payment Value], ALL('public bi_fact_sales'[payment_type]))
+)
+
+
+/* ---------------------------------------------------------------------
+   6. TIME INTELLIGENCE
+   --------------------------------------------------------------------- */
+
+Revenue LY  = CALCULATE([Revenue], SAMEPERIODLASTYEAR(DimDate[Date]))
+Revenue YTD = TOTALYTD([Revenue], DimDate[Date])
+
+Rolling 30D Revenue =
+CALCULATE(
+    [Revenue],
+    DATESINPERIOD(DimDate[Date], MAX(DimDate[Date]), -30, DAY)
+)
+
+YOY % = DIVIDE([Revenue] - [Revenue LY], [Revenue LY])
+
+
+/* ---------------------------------------------------------------------
+   7. SELLERS
+   --------------------------------------------------------------------- */
+
+Sellers            = DISTINCTCOUNT('public bi_fact_sales'[seller_id])
+Revenue per Seller = DIVIDE([Revenue], [Sellers])
+
+
+/* ---------------------------------------------------------------------
+   8. NAVIGATION (drillthrough pages)
+   --------------------------------------------------------------------- */
+
+Drill Title = COALESCE(SELECTEDVALUE('public bi_fact_sales'[category]), "All")
+
+
+/* ---------------------------------------------------------------------
+   9. CALCULATED COLUMN (on 'public bi_fact_sales')
+   --------------------------------------------------------------------- */
+
+Review Bucket =
+SWITCH(
+    TRUE(),
+    ISBLANK('public bi_fact_sales'[review_score]), "No Review",
+    'public bi_fact_sales'[review_score] >= 4,     "Positive (4-5)",
+    'public bi_fact_sales'[review_score] = 3,      "Neutral (3)",
+    'public bi_fact_sales'[review_score] <= 2,     "Negative (1-2)"
+)
